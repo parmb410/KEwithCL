@@ -1,6 +1,3 @@
-
-# Fully integrated train.py with Automated K Estimation
-
 import time
 import torch
 import numpy as np
@@ -10,22 +7,41 @@ from alg.opt import *
 from alg import alg, modelopera
 from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ
 from datautil.getdataloader_single import get_act_dataloader
+from torch.utils.data import DataLoader
 
+# ---- Automated K Estimation function ----
 def automated_k_estimation(features, k_min=2, k_max=10):
     best_k = k_min
     best_score = -1
-
     for k in range(k_min, k_max + 1):
         kmeans = KMeans(n_clusters=k, random_state=42).fit(features)
         labels = kmeans.labels_
         score = silhouette_score(features, labels)
-
         if score > best_score:
             best_k = k
             best_score = score
-
     print(f"[INFO] Optimal K determined as {best_k} (Silhouette Score: {best_score:.4f})")
     return best_k
+
+# ---- Warm-Up Pretraining Function ----
+def warmup_pretraining(algorithm, train_loader, device, num_epochs=2, lr=1e-3):
+    print(f"Starting warm-up pretraining for {num_epochs} epochs...")
+    optimizer = torch.optim.Adam(algorithm.encoder.parameters(), lr=lr)
+    algorithm.encoder.train()
+    for epoch in range(num_epochs):
+        total_loss = 0.0
+        for batch in train_loader:
+            x, y = batch[:2]
+            x, y = x.to(device), y.to(device)
+            optimizer.zero_grad()
+            features = algorithm.encoder(x)
+            logits = algorithm.clf(features)
+            loss = torch.nn.functional.cross_entropy(logits, y)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        print(f"Warm-up Epoch [{epoch+1}/{num_epochs}], Loss: {total_loss/len(train_loader):.4f}")
+    print("Warm-up pretraining done.")
 
 def main(args):
     s = print_args(args, [])
@@ -33,40 +49,35 @@ def main(args):
 
     print_environ()
     print(s)
-
     train_loader, train_loader_noshuffle, valid_loader, target_loader, _, _, _ = get_act_dataloader(args)
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     algorithm_class = alg.get_algorithm_class(args.algorithm)
-    algorithm = algorithm_class(args).cuda()
+    algorithm = algorithm_class(args).to(device)
 
+    # ---- WARM-UP PRETRAINING ----
+    warmup_pretraining(algorithm, train_loader, device, num_epochs=2, lr=args.lr)
 
-
-    # ---- WARM-UP PRE-TRAINING ----
-    print("\\n==== Warm-up Pre-Training (1-2 epochs) ====")
-    algorithm.train()
-    warmup_epochs = 2
-    for epoch in range(warmup_epochs):
-        print(f"Warm-up Epoch {epoch + 1}/{warmup_epochs}")
-        for step in range(args.local_epoch):
-            for data in train_loader:
-                _ = algorithm.update_a(data, opta)
-    print("Warm-up Pre-Training done.")
-    # Automated K Estimation
+    # ---- FEATURE EXTRACTION FOR K-ESTIMATION ----
     algorithm.eval()
     feature_list = []
-
     with torch.no_grad():
         for batch in train_loader:
-            data = batch[0].cuda() if isinstance(batch, (list, tuple)) else batch.cuda()
-            features = algorithm.featurizer(data)  # Or your actual encoder logic
+            x = batch[0].to(device)
+            features = algorithm.encoder(x)
             feature_list.append(features.cpu().numpy())
-
     all_features = np.concatenate(feature_list, axis=0)
+
+    # ---- AUTOMATED K ESTIMATION ----
     optimal_k = automated_k_estimation(all_features)
     args.latent_domain_num = optimal_k
     print(f"Using automated latent_domain_num (K): {args.latent_domain_num}")
 
-    # Batch size adjustment based on latent_domain_num
+    # ---- (Optional) Update your dataset with new domain labels here, if needed ----
+    # e.g., Assign kmeans.labels_ to samples, or update DataLoader if required by your algorithm
+
+    # ---- Adjust batch size based on latent_domain_num ----
     if args.latent_domain_num < 6:
         args.batch_size = 32 * args.latent_domain_num
     else:
@@ -74,6 +85,7 @@ def main(args):
 
     best_valid_acc, target_acc = 0, 0
 
+    # ---- MAIN DIVERSIFY TRAINING LOOP ----
     algorithm.train()
     optd = get_optimizer(algorithm, args, nettype='Diversify-adv')
     opt = get_optimizer(algorithm, args, nettype='Diversify-cls')
@@ -131,6 +143,10 @@ def main(args):
 
     print(f'Target acc: {target_acc:.4f}')
 
-if __name__ == '__main__':
-    args = get_args()
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    # (your original arg definitions)
+    args = parser.parse_args()
     main(args)
