@@ -1,7 +1,5 @@
-# Copyright (c) Microsoft Corporation.
-# Licensed under the MIT License.
+# getdataloader_single.py
 
-# coding=utf-8
 import numpy as np
 from torch.utils.data import DataLoader
 
@@ -11,7 +9,6 @@ from datautil.util import combindataset, subdataset
 import datautil.actdata.cross_people as cross_people
 
 task_act = {'cross_people': cross_people}
-
 
 def get_dataloader(args, tr, val, tar):
     train_loader = DataLoader(dataset=tr, batch_size=args.batch_size,
@@ -23,7 +20,6 @@ def get_dataloader(args, tr, val, tar):
     target_loader = DataLoader(dataset=tar, batch_size=args.batch_size,
                                num_workers=args.N_WORKERS, drop_last=False, shuffle=False)
     return train_loader, train_loader_noshuffle, valid_loader, target_loader
-
 
 def get_act_dataloader(args):
     source_datasetlist = []
@@ -39,20 +35,33 @@ def get_act_dataloader(args):
             target_datalist.append(tdata)
         else:
             source_datasetlist.append(tdata)
-            if len(tdata)/args.batch_size < args.steps_per_epoch:
-                args.steps_per_epoch = len(tdata)/args.batch_size
-    rate = 0.2
-    args.steps_per_epoch = int(args.steps_per_epoch*(1-rate))
-    tdata = combindataset(args, source_datasetlist)
-    l = len(tdata.labels)
-    indexall = np.arange(l)
-    np.random.seed(args.seed)
-    np.random.shuffle(indexall)
-    ted = int(l*rate)
-    indextr, indexval = indexall[ted:], indexall[:ted]
-    tr = subdataset(args, tdata, indextr)
-    val = subdataset(args, tdata, indexval)
-    targetdata = combindataset(args, target_datalist)
-    train_loader, train_loader_noshuffle, valid_loader, target_loader = get_dataloader(
-        args, tr, val, targetdata)
-    return train_loader, train_loader_noshuffle, valid_loader, target_loader, tr, val, targetdata
+
+    # Combines datasets as in your original pipeline
+    tr = combindataset(args, source_datasetlist)
+    val = subdataset(args, source_datasetlist, type='val')
+    tar = combindataset(args, target_datalist)
+    return get_dataloader(args, tr, val, tar) + (tr, val, tar)
+
+def inject_domain_labels(dataset, domain_labels):
+    """
+    Safely injects domain labels into a dataset.
+    Handles common PyTorch dataset structures.
+    """
+    # Try to use the setter if available
+    if hasattr(dataset, 'set_domain_labels') and callable(getattr(dataset, 'set_domain_labels')):
+        dataset.set_domain_labels(domain_labels)
+    # Otherwise, set the dlabels attribute directly if it exists
+    elif hasattr(dataset, 'dlabels'):
+        dataset.dlabels = np.array(domain_labels, dtype=int)
+    else:
+        # Recursively set on constituent datasets if this is a ConcatDataset or similar
+        if hasattr(dataset, 'datasets'):  # e.g., torch.utils.data.ConcatDataset
+            idx = 0
+            for subds in dataset.datasets:
+                n = len(subds)
+                inject_domain_labels(subds, domain_labels[idx:idx + n])
+                idx += n
+        else:
+            raise RuntimeError(
+                "Dataset does not support domain label injection. Please add set_domain_labels method or dlabels attribute."
+            )
