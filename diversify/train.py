@@ -8,6 +8,7 @@ from alg import alg, modelopera
 from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ
 from datautil.getdataloader_single import get_act_dataloader
 from torch.utils.data import DataLoader
+from datautil.getdataloader_single import inject_domain_labels
 
 # ---- Automated K Estimation function ----
 def automated_k_estimation(features, k_min=2, k_max=10):
@@ -70,9 +71,15 @@ def main(args):
     all_features = np.concatenate(feature_list, axis=0)
 
     # ---- AUTOMATED K ESTIMATION ----
+    # ---- AUTOMATED K ESTIMATION ----
     optimal_k = automated_k_estimation(all_features)
     args.latent_domain_num = optimal_k
     print(f"Using automated latent_domain_num (K): {args.latent_domain_num}")
+
+    kmeans = KMeans(n_clusters=optimal_k, random_state=42).fit(all_features)
+    domain_labels = kmeans.labels_
+    inject_domain_labels(train_loader.dataset, domain_labels)
+
 
     # ---- (Optional) Update your dataset with new domain labels here, if needed ----
     # e.g., Assign kmeans.labels_ to samples, or update DataLoader if required by your algorithm
