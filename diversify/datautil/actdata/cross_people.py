@@ -6,7 +6,6 @@ from datautil.util import mydataset, Nmax
 import numpy as np
 import torch
 
-
 class ActList(mydataset):
     def __init__(self, args, dataset, root_dir, people_group, group_num, transform=None, target_transform=None, pclabels=None, pdlabels=None, shuffle_grid=True):
         super(ActList, self).__init__(args)
@@ -52,3 +51,13 @@ class ActList(mydataset):
 
     def set_x(self, x):
         self.x = x
+
+    # --- Added for DIVERSIFY automated K-injection ---
+    def set_domain_labels(self, dlabels):
+        self.dlabels = np.array(dlabels, dtype=int)
+    
+    def __getitem__(self, idx):
+        x = self.x[idx]
+        y = self.labels[idx]
+        d = self.dlabels[idx] if hasattr(self, 'dlabels') else -1
+        return x, y, d
